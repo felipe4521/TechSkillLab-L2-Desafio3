@@ -5,6 +5,7 @@ import co.com.techskill.lab2.library.repository.IPetitionRepository;
 import co.com.techskill.lab2.library.service.IOrchestratorService;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
@@ -38,24 +39,47 @@ public class OrchestratorServiceImpl implements IOrchestratorService {
                             .filter(actor1 -> actor1.supports(type))
                             .findFirst()
                             .orElseThrow(() -> new IllegalStateException("No actor type " + type));
-                    System.out.println("Agrupación por tipo");
+                    System.out.println("Agrupación por tipo: " + type);
 
-                    if("LEND".equals(type)){
+                    if("LEND".equals(type) || "LEND_INSPECT".equals(type)){
                         return g.sort((a,b) -> Integer.compare(b.getPriority(), a.getPriority()))
-                                .doOnNext(petition -> System.out.println(String.format("Petición [LEND] con ID: %s en cola",
-                                        petition.getPetitionId())))
+                                .doOnNext(petition -> System.out.println(String.format("Petición [%s] con ID: %s en cola",
+                                        type, petition.getPetitionId())))
                                 .concatMap( petition -> actor.handle(petition)
                                         .doOnSubscribe(s -> System.out.println("Procesando petición con ID "+petition.getPetitionId())))
                                 .doOnNext(res -> System.out.println("Proceso exitoso"))
                                 .doOnError(err-> System.out.println("Procesamiento falló - "+err.getMessage()))
-                                .onErrorContinue((err, p) -> System.out.println("Petitición omitida " + err.getMessage()));
-                    }else{
+                                .onErrorContinue((err, p) -> System.out.println("Petición omitida " + err.getMessage()));
+                    } else if ("RETURN".equals(type) || "RETURN_INSPECT".equals(type)) {
+                        return g.sort((a,b) -> Integer.compare(b.getPriority(), a.getPriority()))
+                                .doOnNext(petition -> System.out.println(String.format("Petición [%s] con ID: %s en cola",
+                                        type, petition.getPetitionId())))
+                                .concatMap( petition -> actor.handle(petition)
+                                        .doOnSubscribe(s -> System.out.println("Procesando petición con ID "+petition.getPetitionId())))
+                                .doOnNext(res -> System.out.println("Proceso exitoso"))
+                                .doOnError(err-> System.out.println("Procesamiento falló - "+err.getMessage()))
+                                .onErrorContinue((err, p) -> System.out.println("Petición omitida " + err.getMessage()));
+                    } else if ("INSPECT".equals(type)) {
+                        // Procesa INSPECT solo si priority >= 7, ordenando por prioridad descendente
+                        return g.filter(petition -> petition.getPriority() != null && petition.getPriority() >= 7)
+                                .sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()))
+                                .doOnNext(petition -> System.out.println(String.format("Petición [INSPECT] con ID: %s en cola (priority %d)",
+                                        petition.getPetitionId(), petition.getPriority())))
+                                // flatMapSequential: paralelo pero preserva orden relativo
+                                .flatMapSequential(petition -> actor.handle(petition)
+                                        .doOnSubscribe(s -> System.out.println("Procesando petición de tipo [INSPECT] con ID "+petition.getPetitionId()))
+                                        .doOnNext(res -> System.out.println("Proceso exitoso"))
+                                        .doOnError(err-> System.out.println("Procesamiento falló - "+err.getMessage()))
+                                        .onErrorResume(err -> Mono.just("Error en INSPECT: " + err.getMessage()))
+                                )
+                                .doOnError(err-> System.out.println("Procesamiento INSPECT falló - "+err.getMessage()));
+                    } else {
                         return g.flatMap(petition -> actor.handle(petition)
-                                .doOnSubscribe(s -> System.out.println("Procesando petición de tipo [RETURN] con ID "+petition.getPetitionId()))
+                                .doOnSubscribe(s -> System.out.println("Procesando petición de tipo ["+type+"] con ID "+petition.getPetitionId()))
                                 .doOnNext(res -> System.out.println("Proceso exitoso"))
                                 .doOnError(err-> System.out.println("Procesamiento falló - "+err.getMessage())),
                                 4)
-                                .onErrorContinue((err, p) -> System.out.println("Petitición omitida " + err.getMessage()));
+                                .onErrorContinue((err, p) -> System.out.println("Petición omitida " + err.getMessage()));
                     }
 
                 }).timeout(Duration.ofSeconds(5), Flux.just("Timeout exceeded")) //Control
